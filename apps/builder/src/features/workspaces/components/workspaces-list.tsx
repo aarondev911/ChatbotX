@@ -199,11 +199,18 @@ const WorkspacesList = async ({
   const createLabel = t("actions.createFeature", {
     feature: t("fields.workspace.label"),
   })
-  // Community hides the card once a workspace exists (self-hosted installs
-  // are meant to stay single-workspace), but a user with ZERO workspaces has
-  // no other path to `/channels/create` anywhere on this page — hiding it
-  // here leaves them stuck on a static "no workspaces" message forever.
-  const showCreateCard = !isCommunity() || workspaces.length === 0
+  // Community allows up to `COMMUNITY_MAX_WORKSPACES` workspaces per owner
+  // (default 1) — keep in sync with the cap enforced in
+  // `packages/business/src/workspace/service.ts`. The card must stay visible
+  // while under the cap: `/channels/create` is the only path to create one
+  // from this page.
+  const configuredLimit = Number(process.env.COMMUNITY_MAX_WORKSPACES ?? 1)
+  const communityMaxWorkspaces =
+    Number.isFinite(configuredLimit) && configuredLimit > 0
+      ? Math.floor(configuredLimit)
+      : 1
+  const showCreateCard =
+    !isCommunity() || workspaces.length < communityMaxWorkspaces
   const ownerIds = new Set(ownerWorkspaceIds)
   const superAdminIds = new Set(superAdminWorkspaceIds)
   const ownerLabel = t("home.owner")

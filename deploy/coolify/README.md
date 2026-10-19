@@ -84,6 +84,7 @@ Optional:
 |---|---|---|
 | `POSTGRES_DB` / `POSTGRES_USER` | `chatbotx` / `chatbotx` | |
 | `NEXT_PUBLIC_EDITION` | `community` | |
+| `COMMUNITY_MAX_WORKSPACES` | `1` | max workspaces per user in the community edition |
 | `LOG_LEVEL` | `info` | |
 | `SMTP_SERVER` | `smtp://username:password@localhost:1025` | leave unset if you have no SMTP: mail sending fails, the app still boots |
 | `RUN_DB_MIGRATE` | `true` | keep enabled |

@@ -60,7 +60,18 @@ const stableKey = (where: WorkspaceWhere) =>
   JSON.stringify(Object.fromEntries(Object.entries(where).sort()))
 
 const PURGE_WORKSPACE_TEARDOWN_CONCURRENCY = 5
-const COMMUNITY_MAX_WORKSPACES = 1
+// Community edition caps workspaces per owner. Configurable so a self-hosted
+// install can raise it without patching code again; the default keeps
+// upstream's single-workspace behaviour.
+const DEFAULT_COMMUNITY_MAX_WORKSPACES = 1
+const communityMaxWorkspaces = (): number => {
+  const configured = Number(
+    process.env.COMMUNITY_MAX_WORKSPACES ?? DEFAULT_COMMUNITY_MAX_WORKSPACES,
+  )
+  return Number.isFinite(configured) && configured > 0
+    ? Math.floor(configured)
+    : DEFAULT_COMMUNITY_MAX_WORKSPACES
+}
 const WORKSPACE_LIMIT_LOCK_TIMEOUT_SECONDS = 30
 
 const WORKSPACE_SETTINGS_KEYS = [
@@ -671,8 +682,9 @@ class WorkspaceService extends BaseService {
     quotaConsumption?: WorkspaceQuotaConsumption
   }): Promise<WorkspaceModel> {
     if (isCommunity()) {
-      // Community edition allows exactly one workspace per owner. Serialize
-      // the count-then-insert so concurrent create requests cannot both pass.
+      // Community edition allows `COMMUNITY_MAX_WORKSPACES` workspaces per
+      // owner (default 1). Serialize the count-then-insert so concurrent
+      // create requests cannot both pass.
       const ownerId = props.data.ownerId ?? props.createdBy
       return await distributedLock.runExclusive({
         key: `workspace-limit:${ownerId}`,
@@ -683,7 +695,7 @@ class WorkspaceService extends BaseService {
             workspaceModel,
             eq(workspaceModel.ownerId, ownerId),
           )
-          if (owned >= COMMUNITY_MAX_WORKSPACES) {
+          if (owned >= communityMaxWorkspaces()) {
             throw workspaceLimitReachedException()
           }
           return this.insertWorkspace(props)
