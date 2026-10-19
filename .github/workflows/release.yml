@@ -16,7 +16,7 @@ on:
           - prod
 
 env:
-  BUILD_PLATFORMS: linux/amd64 #,linux/arm64
+  BUILD_PLATFORMS: linux/arm64
   DOCKER_REGISTRY: ghcr.io
 
 concurrency:
@@ -150,23 +150,23 @@ jobs:
           - label: builder
             image: chatbotx-builder
             dockerfile: ./apps/builder/docker/Dockerfile
-            runner: ubuntu-latest
+            runner: ubuntu-24.04-arm
           - label: worker
             image: chatbotx-worker
             dockerfile: ./apps/worker/docker/Dockerfile
-            runner: ubuntu-latest
+            runner: ubuntu-24.04-arm
           - label: realtime
             image: chatbotx-realtime
             dockerfile: ./apps/realtime/docker/Dockerfile
-            runner: ubuntu-latest
+            runner: ubuntu-24.04-arm
           - label: mcp-server
             image: chatbotx-mcp
             dockerfile: ./apps/mcp-server/docker/Dockerfile
-            runner: ubuntu-latest
+            runner: ubuntu-24.04-arm
           - label: javascript-executor
             image: chatbotx-javascript-executor
             dockerfile: ./apps/javascript-executor/docker/Dockerfile
-            runner: ubuntu-latest
+            runner: ubuntu-24.04-arm
     # Baseline builder leg was ~16 min and the others ~1-2 min. Bounds a hung
     # build, and an unprovisioned `runner` label, against the 24-hour default.
     timeout-minutes: 45
