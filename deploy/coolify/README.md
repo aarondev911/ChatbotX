@@ -159,6 +159,25 @@ In Coolify every container should read `running (healthy)` except
 Then upload an image from the UI: this exercises presigned PUT against
 `S3_ENDPOINT`, which is where a mismatched `S3_*` / `RUSTFS_*` pair shows up.
 
+### Health probes
+
+Traefik's Docker provider ignores containers Docker reports as `unhealthy`, so a
+failing probe silently removes that container's routers and requests fall
+through to the catch-all (`503 no available server`). Two probes are
+non-obvious:
+
+- **builder**: Next's standalone server binds `process.env.HOSTNAME`, which
+  Docker sets to the container id, so it never listens on `127.0.0.1`. The
+  compose pins `HOSTNAME=0.0.0.0` for the probe on `127.0.0.1:3000/api/health`.
+- **realtime**: PartyKit only routes `/parties/<party>/<room>`, so a root
+  `/health` is a 404 for every image. The probe targets
+  `/parties/main/health`, which the main party answers with 200 and which is
+  also public as `/ws/parties/main/health` — the quickest way to confirm that a
+  new `:main` image actually rolled out.
+
+`pull_policy: always` keeps `:main` honest: without it `docker compose up`
+reuses the cached image and reports a successful deploy of stale code.
+
 ## 6. Operación
 
 - **Update**: redeploy with a pinned tag instead of `:main`

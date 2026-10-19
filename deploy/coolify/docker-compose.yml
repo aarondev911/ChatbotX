@@ -121,6 +121,8 @@ services:
   builder:
     <<: [*network, *datastore-health]
     image: ghcr.io/aarondev911/chatbotx-builder:main
+    # The :main tag is rebuilt on every push, so always ask the registry.
+    pull_policy: always
     restart: unless-stopped
     expose:
       - "3000"
@@ -128,6 +130,10 @@ services:
       <<: *app-env
       NODE_OPTIONS: --max-old-space-size=4096
       PORT: "3000"
+      # Next's standalone server listens on process.env.HOSTNAME, and Docker sets
+      # that to the container id, so the process would bind to a single address
+      # instead of 127.0.0.1 and the healthcheck below would never connect.
+      HOSTNAME: "0.0.0.0"
       # One-shot bootstrap. Leave migrations on: a deploy against an unmigrated
       # database otherwise fails at the first query. Seeding is opt-in because
       # the seed also creates demo data.
@@ -151,6 +157,7 @@ services:
   worker:
     <<: [*network, *datastore-health]
     image: ghcr.io/aarondev911/chatbotx-worker:main
+    pull_policy: always
     restart: unless-stopped
     command: ["worker", "all"]
     networks:
@@ -170,6 +177,7 @@ services:
 
   javascript-executor:
     image: ghcr.io/aarondev911/chatbotx-javascript-executor:main
+    pull_policy: always
     restart: unless-stopped
     networks:
       - javascript-executor-network
@@ -196,19 +204,23 @@ services:
   realtime:
     <<: *network
     image: ghcr.io/aarondev911/chatbotx-realtime:main
+    pull_policy: always
     restart: unless-stopped
     expose:
       - "1999"
     environment:
       NEXT_PUBLIC_BUILDER_URL: ${NEXT_PUBLIC_BUILDER_URL}
       REALTIME_BROADCAST_SECRET: ${REALTIME_BROADCAST_SECRET}
+    # PartyKit only routes /parties/<party>/<room>, so a root /health is a 404 no
+    # matter what the image does. The main party answers the probe instead; the
+    # same path is publicly reachable as <builder-url>/ws/parties/main/health.
     healthcheck:
       test:
         [
           "CMD",
           "node",
           "-e",
-          "fetch('http://127.0.0.1:1999/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+          "fetch('http://127.0.0.1:1999/parties/main/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
       interval: 30s
       timeout: 10s
