@@ -1,0 +1,228 @@
+# ChatbotX — Docker Compose service for Coolify (single server, Traefik).
+#
+# Images: ghcr.io/aarondev911/chatbotx-* (linux/arm64), built by this fork.
+#
+# Every ${VAR} below is supplied by the Coolify service Environment Variables.
+# Coolify writes them to the .env file next to this compose file, so
+# `docker compose` interpolates them at deploy time and no secret lives in git.
+#
+# Nothing binds a host port: all public traffic enters through Traefik, which
+# routes to the `expose`d container ports of builder / realtime / filesystem.
+
+x-network: &network
+  networks:
+    - main
+
+x-datastore-health: &datastore-health
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    filesystem:
+      condition: service_healthy
+
+# Shared application environment. Kept as an anchor so worker/builder/realtime
+# can never drift apart (a mismatch between them surfaces as silent auth or
+# broadcast failures rather than a startup error).
+x-app-env: &app-env
+  BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+  BETTER_AUTH_URL: ${BETTER_AUTH_URL}
+  DATABASE_URL: "postgresql://${POSTGRES_USER:-chatbotx}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-chatbotx}?schema=public"
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+  JAVASCRIPT_EXECUTOR_URL: http://javascript-executor:3210
+  JAVASCRIPT_EXECUTOR_TOKEN: ${JAVASCRIPT_EXECUTOR_TOKEN}
+  NEXT_PUBLIC_BUILDER_URL: ${NEXT_PUBLIC_BUILDER_URL}
+  NEXT_PUBLIC_EDITION: ${NEXT_PUBLIC_EDITION:-community}
+  NEXT_PUBLIC_INTERNAL_STORAGE_URL: ${NEXT_PUBLIC_INTERNAL_STORAGE_URL}
+  NEXT_PUBLIC_STORAGE_URL: ${NEXT_PUBLIC_STORAGE_URL}
+  REALTIME_BROADCAST_SECRET: ${REALTIME_BROADCAST_SECRET}
+  REALTIME_INTERNAL_URL: http://realtime:1999
+  REDIS_URL: redis://redis:6379
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
+  S3_BUCKET: ${S3_BUCKET:-chatbotx}
+  S3_ENDPOINT: ${S3_ENDPOINT}
+  S3_REGION: ${S3_REGION:-us-west-2}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
+  SCHEDULER_BUCKET_RANGE: "0-255"
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  # SMTP_FROM is required by the mail package schema even when no SMTP server is
+  # configured; without it the builder refuses to start.
+  SMTP_FROM: ${SMTP_FROM}
+  SMTP_SERVER: ${SMTP_SERVER:-smtp://username:password@localhost:1025}
+
+services:
+  postgres:
+    <<: *network
+    image: timescale/timescaledb-ha:pg18-all
+    restart: unless-stopped
+    volumes:
+      - db-data:/home/postgres/pgdata
+    command: ["postgres", "-c", "log_statement=none"]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-chatbotx}
+      POSTGRES_USER: ${POSTGRES_USER:-chatbotx}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  filesystem:
+    <<: *network
+    image: rustfs/rustfs:1.0.0-beta.8
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    expose:
+      - "9000"
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY}
+      RUSTFS_API_CORS_ALLOW_ORIGIN: "*"
+    volumes:
+      - filesystem-data:/data
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -f http://127.0.0.1:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  filesystem-init:
+    <<: *network
+    image: rustfs/rc:v0.1.22
+    depends_on:
+      filesystem:
+        condition: service_healthy
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY}
+    entrypoint: >
+      /bin/sh -c "rc alias set local http://filesystem:9000
+      $${RUSTFS_ACCESS_KEY} $${RUSTFS_SECRET_KEY}; rc mb local/chatbotx
+      --ignore-existing; touch /tmp/empty && rc cp /tmp/empty
+      local/chatbotx/public/; rc anonymous set public local/chatbotx/public;"
+    restart: "no"
+
+  redis:
+    <<: *network
+    image: redis:8.8.0-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  builder:
+    <<: [*network, *datastore-health]
+    image: ghcr.io/aarondev911/chatbotx-builder:main
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      <<: *app-env
+      NODE_OPTIONS: --max-old-space-size=4096
+      PORT: "3000"
+      # One-shot bootstrap. Leave migrations on: a deploy against an unmigrated
+      # database otherwise fails at the first query. Seeding is opt-in because
+      # the seed also creates demo data.
+      RUN_DB_MIGRATE: ${RUN_DB_MIGRATE:-true}
+      RUN_DB_SEED: ${RUN_DB_SEED:-false}
+    # The builder image is node:24-trixie-slim based and ships no curl/wget, so
+    # the probe uses Node's global fetch (available since Node 18).
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  worker:
+    <<: [*network, *datastore-health]
+    image: ghcr.io/aarondev911/chatbotx-worker:main
+    restart: unless-stopped
+    command: ["worker", "all"]
+    networks:
+      - main
+      - javascript-executor-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      filesystem:
+        condition: service_healthy
+      javascript-executor:
+        condition: service_healthy
+    environment:
+      <<: *app-env
+
+  javascript-executor:
+    image: ghcr.io/aarondev911/chatbotx-javascript-executor:main
+    restart: unless-stopped
+    networks:
+      - javascript-executor-network
+    expose:
+      - "3210"
+    environment:
+      JAVASCRIPT_EXECUTOR_TOKEN: ${JAVASCRIPT_EXECUTOR_TOKEN}
+      MAX_CONCURRENCY: ${JAVASCRIPT_EXECUTOR_MAX_CONCURRENCY:-2}
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid,nodev
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:3210/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  realtime:
+    <<: *network
+    image: ghcr.io/aarondev911/chatbotx-realtime:main
+    restart: unless-stopped
+    expose:
+      - "1999"
+    environment:
+      NEXT_PUBLIC_BUILDER_URL: ${NEXT_PUBLIC_BUILDER_URL}
+      REALTIME_BROADCAST_SECRET: ${REALTIME_BROADCAST_SECRET}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:1999/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+networks:
+  main:
+    driver: bridge
+  javascript-executor-network:
+    driver: bridge
+    internal: true
+
+volumes:
+  db-data:
+  redis-data:
+  filesystem-data:

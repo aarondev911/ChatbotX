@@ -235,6 +235,7 @@ jobs:
           push: true
           tags: |
             ${{ env.DOCKER_REGISTRY }}/${{ needs.prepare-metadata.outputs.image_namespace }}/${{ matrix.image }}:main
+            ${{ env.DOCKER_REGISTRY }}/${{ needs.prepare-metadata.outputs.image_namespace }}/${{ matrix.image }}:sha-${{ github.sha }}
           labels: ${{ needs.prepare-metadata.outputs.labels }}
           # Per-leg scope: the five matrix legs otherwise share one unscoped GHA
           # cache namespace and evict each other against the 10GB LRU budget.

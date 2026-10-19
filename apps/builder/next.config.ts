@@ -53,10 +53,6 @@ const nextConfig: NextConfig = {
   async rewrites() {
     const alwaysRewrites = [
       {
-        source: "/assets/:path*",
-        destination: `${storageUrl}/:path*`,
-      },
-      {
         source: "/zalo_verifier:verifier.html",
         destination: "/api/zalo-verifier/:verifier",
       },
@@ -78,6 +74,10 @@ const nextConfig: NextConfig = {
     // unmatched /portal/* paths fall through to the portal proxy below.
     return {
       afterFiles: [
+        // Dev-only convenience proxy. In production the client reads its
+        // storage base from NEXT_PUBLIC_STORAGE_URL at runtime, so the built
+        // image must not bake a build-time URL into the route manifest.
+        { source: "/assets/:path*", destination: `${storageUrl}/:path*` },
         ...alwaysRewrites,
         { source: "/ws/:path*", destination: `${realtimeProxyUrl}/:path*` },
         {
